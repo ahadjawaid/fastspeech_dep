@@ -11,27 +11,33 @@ class FastSpeech(nn.Module):
         self.embedding = nn.Embedding(vocab_sz, nhidden)
         self.fft_pho = nn.ModuleList([FeedForwardTransformer(nhidden, nheads, kernal_sz, nfilters, p)
                                       for _ in range(nblocks)])
+        
         self.duration_predictor = VariencePredictor(nhidden, kernal_sz_v, nfilters_v, p_v)
+
         self.fft_mel = nn.ModuleList([FeedForwardTransformer(nhidden, nheads, kernal_sz, nfilters, p)
                                       for _ in range(nblocks)])
         self.linear = nn.Linear(nhidden, nout)
-    
     def forward(self, inp, durations, upsample_ratio, dur_train=False):
         x = self.embedding(inp)
+
         x = x + positional_embeddings(*x.shape[-2:], device=self.device)
+
         for layer in self.fft_pho:
             x = layer(x)
 
-        durations_pred = self.duration_predictor(x.detach()).squeeze(-1)
+        log_durations_pred = self.duration_predictor(x.detach()).squeeze(-1)
         if not self.training:
-            durations = durations_pred
+            durations = torch.exp(log_durations_pred)
 
         x = length_regulator(x, durations, upsample_ratio, device=self.device)
+
         x = x + positional_embeddings(*x.shape[-2:], device=self.device)
+
         for layer in self.fft_mel:
             x = layer(x)
+            
         x = self.linear(x).transpose(1,2)
-        return (x, durations_pred) if dur_train else x
+        return (x, log_durations_pred) if dur_train else x
     
 class VariencePredictor(nn.Module):
     def __init__(self, ni, ks, nf, p):
@@ -71,7 +77,7 @@ class SelfAttention(nn.Module):
         x = self.kqv(inp)
         x = torch.cat(torch.chunk(x, self.heads, dim=-1))
         Q, K, V = torch.chunk(x, 3, dim=-1)
-        x = F.softmax(Q @ K.transpose(1,2) / self.scale, dim=-1) @ V
+        x = F.softmax((Q @ K.transpose(1,2)) / self.scale, dim=-1) @ V
         x = torch.cat(torch.chunk(x, self.heads), dim=-1)
         x = self.proj(x)
         x = self.dropout(x)
@@ -89,8 +95,8 @@ class ResConv(nn.Module):
     def forward(self, inp):
         x = F.relu(self.conv1(inp.transpose(1,2)))
         x = F.relu(self.conv2(x))
-        x = x.transpose(1,2) + inp
         x = self.dropout(x)
+        x = x.transpose(1,2) + inp
         return self.norm(x)
     
 def positional_embeddings(seq_len, d_model, device=None):

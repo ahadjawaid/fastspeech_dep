@@ -10,9 +10,6 @@ class TransformerScheduler():
 
     def step(self):
         self._update_learning_rate()
-        self._optimizer.step()
-
-    def zero_grad(self): self._optimizer.zero_grad()
 
     def _get_lr_scale(self):
         d_model = self.d_model
